@@ -34,13 +34,34 @@
 
 ## 运行与部署
 
-## Run Locally
+### 本地开发 (Run Locally)
 
-**Prerequisites:**  Node.js
+**必要条件 (Prerequisites):** 
+- [Node.js](https://nodejs.org/) (推荐 v18+)
+- **Google Gemini API Key**: 用于驱动游戏中的动态环境对话和 AI 无线电通讯。
 
+**步骤:**
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+1. **安装依赖**:
+   ```bash
+   npm install
+   ```
+
+2. **配置环境变量**:
+   在项目根目录下创建一个名为 `.env.local` 的文件，并将你的 Gemini API Key 填入：
+   
+   ```bash
+   # .env.local 样例模板
+   GEMINI_API_KEY=在这里替换成你的_API_KEY
+   ```
+   > [!TIP]
+   > 你可以在 [Google AI Studio](https://aistudio.google.com/app/apikey) 免费获取 API Key。
+
+3. **运行应用**:
+   ```bash
+   npm run dev
+   ```
+
+4. **访问**:
+   打开浏览器访问 [http://localhost:3000](http://localhost:3000)
+

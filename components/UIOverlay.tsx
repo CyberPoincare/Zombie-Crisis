@@ -28,9 +28,26 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
     }
   };
 
+  const lastLogsCountRef = useRef(radioLogs.length);
+
   useEffect(() => {
-    if (isAtBottomRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    if (scrollRef.current) {
+        const el = scrollRef.current;
+        const newCount = radioLogs.length;
+        const oldCount = lastLogsCountRef.current;
+        
+        if (isAtBottomRef.current) {
+            el.scrollTop = el.scrollHeight;
+        } else if (newCount >= 200 && oldCount >= 200) {
+            // We likely removed an item from the top and added one at the bottom
+            // This causes a jump. We need to compensate.
+            // Assuming most log lines are roughly the same height, but to be precise, 
+            // we could capture the height of the first child before it's removed.
+            // For now, let's just avoid auto-scroll if not at bottom.
+            // Browsers usually handle "scroll anchoring" automatically now, 
+            // but if not, we'd need to adjust scrollTop here.
+        }
+        lastLogsCountRef.current = newCount;
     }
   }, [radioLogs]);
 
@@ -256,10 +273,10 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                   <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_#10b981]"></span>
                   实时通讯频道
               </h3>
-              <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto flex-1 space-y-3 pr-2 text-xs font-mono leading-relaxed scrollbar-hide">
+              <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto flex-1 space-y-3 pr-2 text-xs font-mono leading-relaxed">
                   {radioLogs.length === 0 && <span className="text-slate-600 italic">正在建立连接...</span>}
                   {radioLogs.map(log => (
-                      <div key={log.id} className="flex gap-2">
+                      <div key={log.id} className="flex gap-2 animate-fade-in">
                           <span className="text-slate-500 shrink-0">[{new Date(log.timestamp).toLocaleTimeString([], {hour12: false, hour:'2-digit', minute:'2-digit'})}]</span> 
                           <div>
                               <span 
@@ -273,6 +290,21 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                       </div>
                   ))}
               </div>
+              
+              {!isAtBottomRef.current && radioLogs.length > 0 && (
+                  <button 
+                    onClick={() => {
+                        if (scrollRef.current) {
+                            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                            isAtBottomRef.current = true;
+                            setTick(t => t + 1); // trigger re-render to hide button
+                        }
+                    }}
+                    className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-blue-600/90 text-white text-[10px] px-3 py-1 rounded-full shadow-lg border border-blue-400 animate-bounce transition-all hover:bg-blue-500"
+                  >
+                      ⬇ 有新消息
+                  </button>
+              )}
           </div>
       </div>
 

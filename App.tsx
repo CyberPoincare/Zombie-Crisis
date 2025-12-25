@@ -54,7 +54,14 @@ const App: React.FC = () => {
   }, []);
 
   const handleAddLog = useCallback((msg: RadioMessage) => {
-    setRadioLogs(prev => [...prev.slice(-49), msg]);
+    setRadioLogs(prev => {
+        const newMsg = { ...msg };
+        // Safety: ensure ID is unique even if sender provided a duplicate
+        if (prev.some(m => m.id === msg.id)) {
+            newMsg.id = `${msg.id}-${Math.random()}`;
+        }
+        return [...prev.slice(-199), newMsg];
+    });
   }, []);
 
   const togglePause = () => {

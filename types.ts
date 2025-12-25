@@ -86,6 +86,10 @@ export interface GameEntity {
   isMedic: boolean; // Is this entity a medic?
   healingTargetId?: string; // ID of the zombie being cured
   healingTimer: number; // Progress of curing
+  
+  homeLocationName?: string; // For richer dialogues
+  currentLocationName?: string; // For real-time location awareness
+  locationMetadata?: any; // Detailed LocationInfo from mapDataService
 }
 
 export interface GameState {

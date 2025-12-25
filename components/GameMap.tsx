@@ -1,11 +1,12 @@
 
-import React, { useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, useMapEvents, Polyline, Circle } from 'react-leaflet';
 import L from 'leaflet';
 import { Coordinates, EntityType, CivilianType, GameEntity, GameState, RadioMessage, ToolType, Vector, WeaponType, VisualEffect, SoundType } from '../types';
 import { GAME_CONSTANTS, DEFAULT_LOCATION, CHINESE_SURNAMES, CHINESE_GIVEN_NAMES_MALE, CHINESE_GIVEN_NAMES_FEMALE, THOUGHTS, WEAPON_STATS, WEAPON_SYMBOLS } from '../constants';
 import { generateRadioChatter } from '../services/geminiService';
 import { audioService } from '../services/audioService';
+import { mapDataService } from '../services/mapDataService';
 
 // --- Vector Math Helpers ---
 const getVecDistance = (p1: Coordinates, p2: Coordinates) => {
@@ -63,24 +64,63 @@ const getRandomThought = (entity: GameEntity, neighbors: GameEntity[], nearbyZom
   if (entity.type === EntityType.ZOMBIE) {
     pool = THOUGHTS.ZOMBIE;
   } else if (entity.type === EntityType.SOLDIER) {
-    // Check for nearby armed civilians to complain about
     const nearbyArmedCiv = neighbors.find(n => n.type === EntityType.CIVILIAN && n.isArmed && getVecDistance(entity.position, n.position) < 0.001);
+    
+    const meta = entity.locationMetadata;
+    if (meta && Math.random() < 0.3) {
+      const road = meta.road || '这条路';
+      const feat = meta.feature;
+      const locs = [
+          `正在通过${road}，推进中。`,
+          `在${road}发现敌情，准备战斗。`,
+          feat ? `检查${feat}周边。` : `搜索附近建筑。`,
+          `这里是${entity.currentLocationName}，报告完毕。`
+      ];
+      return locs[Math.floor(Math.random() * locs.length)];
+    }
+
     if (nearbyArmedCiv && Math.random() < 0.3) {
         pool = THOUGHTS.SOLDIER_COMPLAINT;
     } else {
         pool = THOUGHTS.SOLDIER;
     }
   } else {
-    // Civilian
-    if (entity.isArmed) {
-      pool = Math.random() < 0.5 ? THOUGHTS.ARMED_CIVILIAN : THOUGHTS.CIVILIAN_ARMED;
-    } else if (nearbyZombies > 0) {
-      pool = THOUGHTS.CIVILIAN_PANIC;
-    } else {
-      pool = THOUGHTS.CIVILIAN_CALM;
+      // Civilian
+      const meta = entity.locationMetadata;
+      if (meta && Math.random() < 0.45) {
+        const road = meta.road || '这条路';
+        const feat = meta.feature;
+        const sub = meta.suburb;
+
+        const locs = [
+          `我就在${entity.currentLocationName}这儿，怪物越来越多了...`,
+          `${entity.currentLocationName}现在到处都是火，太可怕了。`,
+          `得赶紧离开${road}，前面好像堵住了。`,
+          `这里是${entity.currentLocationName}吗？我已经彻底迷路了...`,
+          feat ? `能在${feat}找个地方躲躲吗？` : `该找个结实的建筑躲起来...`,
+          sub ? `不知道${sub}那边的撤离点还在不在。` : `指挥中心，收到请回答！`
+        ];
+        return locs[Math.floor(Math.random() * locs.length)];
+      }
+
+      if (entity.homeLocationName && Math.random() < 0.15) {
+        const homes = [
+          `我家就住${entity.homeLocationName}附近，不知道那边怎么样了。`,
+          `我想回${entity.homeLocationName}看看...`,
+          `希望能回${entity.homeLocationName}拿点东西。`
+        ];
+        return homes[Math.floor(Math.random() * homes.length)];
+      }
+
+      if (entity.isArmed) {
+        pool = Math.random() < 0.5 ? THOUGHTS.ARMED_CIVILIAN : THOUGHTS.CIVILIAN_ARMED;
+      } else if (nearbyZombies > 0) {
+        pool = THOUGHTS.CIVILIAN_PANIC;
+      } else {
+        pool = THOUGHTS.CIVILIAN_CALM;
+      }
     }
-  }
-  return pool[Math.floor(Math.random() * pool.length)];
+    return pool[Math.floor(Math.random() * pool.length)];
 };
 
 const createEntityIcon = (entity: GameEntity, isSelected: boolean) => {
@@ -259,9 +299,35 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
   const stateRef = useRef<GameState>(initialState);
   const pausedRef = useRef(isPaused);
   const selectedIdRef = useRef(selectedEntityId);
+  const discoveryRef = useRef(false);
+  const victoryAnnouncedRef = useRef(false);
+  const lowHealthAnnouncedRef = useRef(false);
+  const logCounterRef = useRef(0);
+  const getUniqueId = () => `${Date.now()}-${logCounterRef.current++}`;
 
   useEffect(() => { pausedRef.current = isPaused; }, [isPaused]);
   useEffect(() => { selectedIdRef.current = selectedEntityId; }, [selectedEntityId]);
+
+  const lastLogsRef = useRef<Record<string, { text: string, time: number }>>({});
+
+  const addLog = useCallback((data: Omit<RadioMessage, 'id' | 'timestamp'>) => {
+    const now = Date.now();
+    const senderKey = data.senderId || data.sender;
+    const last = lastLogsRef.current[senderKey];
+    
+    // Throttling: Same sender, same message, within 2 seconds
+    if (last && last.text === data.text && now - last.time < 2000) {
+        return; 
+    }
+    
+    lastLogsRef.current[senderKey] = { text: data.text, time: now };
+    logCounterRef.current++;
+    onAddLog({
+        ...data,
+        id: `${now}-${logCounterRef.current}`,
+        timestamp: now
+    });
+  }, [onAddLog]);
   
   useEffect(() => {
       if (initialized && !isPaused) {
@@ -277,14 +343,22 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
         setCenterPos(startPos);
         initPopulation(startPos);
         setInitialized(true);
-        generateRadioChatter(stateRef.current, startPos, 'START').then(text => {
-          onAddLog({ id: Date.now().toString(), sender: '指挥部', text, timestamp: Date.now() });
+        mapDataService.getLocationInfo(startPos).then(info => {
+          generateRadioChatter(stateRef.current, startPos, 'START', info || undefined).then(text => {
+            addLog({ sender: '指挥部', text });
+          });
         });
       },
       (err) => {
         console.warn("Geolocation failed", err);
-        initPopulation(DEFAULT_LOCATION);
+        const startPos = DEFAULT_LOCATION;
+        initPopulation(startPos);
         setInitialized(true);
+        mapDataService.getLocationInfo(startPos).then(info => {
+          generateRadioChatter(stateRef.current, startPos, 'START', info || undefined).then(text => {
+            addLog({ sender: '指挥部', text });
+          });
+        });
       }
     );
   }, []);
@@ -339,6 +413,20 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
 
     entitiesRef.current = newEntities;
     setEntities(newEntities);
+
+    // Async: Assign home locations from nearby features
+    mapDataService.getNearbyFeatures(center).then(features => {
+      if (features.length > 0) {
+        const updated = entitiesRef.current.map(e => {
+          if (e.type === EntityType.CIVILIAN && Math.random() < 0.4) {
+            return { ...e, homeLocationName: features[Math.floor(Math.random() * features.length)] };
+          }
+          return e;
+        });
+        entitiesRef.current = updated;
+        setEntities(updated);
+      }
+    });
   };
 
   // --- AI STEERING HELPERS ---
@@ -577,25 +665,54 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
           entity.position.lng += entity.velocity.y;
         });
 
+        // 1.1b-2 BACKGROUND LOCATION UPDATE
+        if (activeEntities.length > 0) {
+          const updateTarget = activeEntities[Math.floor(Math.random() * activeEntities.length)];
+          mapDataService.getLocationInfo(updateTarget.position).then(info => {
+              if (info) {
+                updateTarget.currentLocationName = info.name;
+                updateTarget.locationMetadata = info;
+              }
+          });
+        }
+
         // 1.1b RANDOM RADIO CHATTER
-        if (Math.random() < 0.02) { // Average once every 2.5s
-            // Include soldiers AND armed civilians
+        if (Math.random() < 0.015) { 
             const channelUsers = activeEntities.filter(e => e.type === EntityType.SOLDIER || (e.type === EntityType.CIVILIAN && e.isArmed));
             if (channelUsers.length > 0) {
                 const chatterSource = channelUsers[Math.floor(Math.random() * channelUsers.length)];
                 let senderPrefix = chatterSource.isMedic ? "医疗兵" : chatterSource.type === EntityType.SOLDIER ? "特专队员" : "武装市民";
                 
-                onAddLog({
-                    id: `chatter-${Date.now()}`,
-                    sender: `${senderPrefix} ${chatterSource.name}`,
-                    senderId: chatterSource.id,
-                    text: chatterSource.thought,
-                    timestamp: Date.now()
+                mapDataService.getLocationInfo(chatterSource.position).then(info => {
+                    if (info) {
+                        chatterSource.currentLocationName = info.name;
+                        chatterSource.locationMetadata = info;
+                    }
+                    
+                    generateRadioChatter(stateRef.current, chatterSource.position, 'RANDOM', info || undefined).then(text => {
+                        addLog({
+                          sender: `${senderPrefix} ${chatterSource.name}`,
+                          senderId: chatterSource.id,
+                          text
+                        });
+                    });
                 });
             }
         }
 
-        // 1.2 INTERACTION (Infection & Combat)
+        // 1.1c ZOMBIE DISCOVERY
+        if (zombies.length > 0 && !discoveryRef.current) {
+            discoveryRef.current = true;
+            const targetZ = zombies[0];
+            mapDataService.getLocationInfo(targetZ.position).then(info => {
+                generateRadioChatter(stateRef.current, targetZ.position, 'DISCOVERY', info || undefined).then(text => {
+                    addLog({
+                        sender: '情报中心',
+                        text
+                    });
+                });
+            });
+        }
         
         // Continuous Infection Logic
         humans.forEach(h => {
@@ -900,8 +1017,28 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
           ? currentEntities.find(e => e.id === selectedIdRef.current) || null
           : null;
 
-      if (stateRef.current.infectedCount === 0 && stateRef.current.healthyCount > 0) stateRef.current.gameResult = 'VICTORY';
-      else if (stateRef.current.healthyCount === 0 && stateRef.current.soldierCount === 0) stateRef.current.gameResult = 'DEFEAT';
+      if (stateRef.current.infectedCount === 0 && stateRef.current.healthyCount > 0 && !victoryAnnouncedRef.current) {
+          stateRef.current.gameResult = 'VICTORY';
+          victoryAnnouncedRef.current = true;
+          mapDataService.getLocationInfo(centerPos).then(info => {
+            generateRadioChatter(stateRef.current, centerPos, 'WAVE_CLEARED', info || undefined).then(text => {
+              addLog({ sender: '总统', text });
+            });
+          });
+      }
+      else if (stateRef.current.healthyCount === 0 && stateRef.current.soldierCount === 0) {
+          stateRef.current.gameResult = 'DEFEAT';
+      }
+      
+      // Low health warning
+      if (stateRef.current.healthyCount < GAME_CONSTANTS.INITIAL_POPULATION * 0.2 && !lowHealthAnnouncedRef.current) {
+          lowHealthAnnouncedRef.current = true;
+          mapDataService.getLocationInfo(centerPos).then(info => {
+            generateRadioChatter(stateRef.current, centerPos, 'LOW_HEALTH', info || undefined).then(text => {
+              addLog({ sender: '情报分析员', text });
+            });
+          });
+      }
 
       onUpdateState({...stateRef.current});
 
@@ -991,9 +1128,13 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
             });
 
             if (luckySurvivors.length > 0) {
-                onAddLog({ id: Date.now().toString(), sender: '后勤', text: `补给已送达。${luckySurvivors.length} 名平民获得武装。`, timestamp: Date.now() });
+                mapDataService.getLocationInfo(clickPos).then(info => {
+                  generateRadioChatter(stateRef.current, clickPos, 'RESCUE', info || undefined).then(text => {
+                    addLog({ sender: '运输机', text: `${text} (${luckySurvivors.length} 名平民获救于 ${info?.name || '目标区'})` });
+                  });
+                });
             } else {
-                onAddLog({ id: Date.now().toString(), sender: '系统', text: `投放位置无幸存者接收。`, timestamp: Date.now() });
+                addLog({ sender: '系统', text: `投放位置无幸存者接收。` });
             }
         }
 
@@ -1030,7 +1171,11 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                  health: 50
                });
             }
-            onAddLog({ id: Date.now().toString(), sender: '总部', text: "特种小队已抵达战区。", timestamp: Date.now() });
+            mapDataService.getLocationInfo(clickPos).then(info => {
+              generateRadioChatter(stateRef.current, clickPos, 'RESCUE', info || undefined).then(text => {
+                addLog({ sender: '特种部队', text: `${text} 小队已在 ${info?.name || '指定区域'} 降落。` });
+              });
+            });
         }
     } else if (selectedTool === ToolType.MEDIC_TEAM) {
         if (useResource(GAME_CONSTANTS.COST_MEDIC) && checkCooldown(ToolType.MEDIC_TEAM, GAME_CONSTANTS.COOLDOWN_MEDIC)) {

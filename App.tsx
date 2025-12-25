@@ -24,6 +24,7 @@ const App: React.FC = () => {
   const [radioLogs, setRadioLogs] = useState<RadioMessage[]>([]);
   const [selectedTool, setSelectedTool] = useState<ToolType>(ToolType.NONE);
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [followingEntityId, setFollowingEntityId] = useState<string | null>(null);
 
   useEffect(() => {
     const initAudio = () => {
@@ -53,7 +54,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleAddLog = useCallback((msg: RadioMessage) => {
-    setRadioLogs(prev => [...prev.slice(-5), msg]);
+    setRadioLogs(prev => [...prev.slice(-49), msg]);
   }, []);
 
   const togglePause = () => {
@@ -94,6 +95,8 @@ const App: React.FC = () => {
         onAddLog={handleAddLog}
         selectedEntityId={selectedEntityId}
         onEntitySelect={setSelectedEntityId}
+        followingEntityId={followingEntityId}
+        onCancelFollow={() => setFollowingEntityId(null)}
       />
       
       <UIOverlay 
@@ -103,6 +106,10 @@ const App: React.FC = () => {
         onSelectTool={setSelectedTool}
         onTogglePause={togglePause}
         onReset={handleResetGame}
+        onLocateEntity={(id) => { 
+            setFollowingEntityId(id); 
+            setSelectedEntityId(id); 
+        }}
       />
     </div>
   );

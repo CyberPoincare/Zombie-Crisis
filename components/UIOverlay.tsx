@@ -11,14 +11,24 @@ interface UIOverlayProps {
   onSelectTool: (tool: ToolType) => void;
   onTogglePause: () => void;
   onReset: () => void;
+  onLocateEntity: (id: string) => void;
 }
 
-const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedTool, onSelectTool, onTogglePause, onReset }) => {
+const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedTool, onSelectTool, onTogglePause, onReset, onLocateEntity }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const isAtBottomRef = useRef(true);
   const [, setTick] = useState(0); // Force re-render for cooldown timers
 
-  useEffect(() => {
+  const handleScroll = () => {
     if (scrollRef.current) {
+        const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
+        // Check if we are at the bottom (with 20px threshold for safety)
+        isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 20;
+    }
+  };
+
+  useEffect(() => {
+    if (isAtBottomRef.current && scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [radioLogs]);
@@ -192,13 +202,16 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                   <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_#10b981]"></span>
                   实时通讯频道
               </h3>
-              <div ref={scrollRef} className="overflow-y-auto flex-1 space-y-3 pr-2 text-xs font-mono leading-relaxed scrollbar-hide">
+              <div ref={scrollRef} onScroll={handleScroll} className="overflow-y-auto flex-1 space-y-3 pr-2 text-xs font-mono leading-relaxed scrollbar-hide">
                   {radioLogs.length === 0 && <span className="text-slate-600 italic">正在建立连接...</span>}
                   {radioLogs.map(log => (
                       <div key={log.id} className="flex gap-2">
                           <span className="text-slate-500 shrink-0">[{new Date(log.timestamp).toLocaleTimeString([], {hour12: false, hour:'2-digit', minute:'2-digit'})}]</span> 
                           <div>
-                              <span className={`font-bold mr-2 ${log.sender === '指挥部' ? 'text-yellow-500' : log.sender === '系统' ? 'text-red-400' : 'text-blue-400'}`}>
+                              <span 
+                                className={`font-bold mr-2 transition-all ${log.senderId ? 'cursor-pointer hover:underline hover:brightness-125' : ''} ${log.sender === '指挥部' ? 'text-yellow-500' : log.sender === '系统' ? 'text-red-400' : 'text-blue-400'}`}
+                                onClick={() => log.senderId && onLocateEntity(log.senderId)}
+                              >
                                   {log.sender}:
                               </span>
                               <span className="text-slate-300">{log.text}</span>

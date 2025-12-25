@@ -63,11 +63,17 @@ const getRandomThought = (entity: GameEntity, neighbors: GameEntity[], nearbyZom
   if (entity.type === EntityType.ZOMBIE) {
     pool = THOUGHTS.ZOMBIE;
   } else if (entity.type === EntityType.SOLDIER) {
-    pool = THOUGHTS.SOLDIER;
+    // Check for nearby armed civilians to complain about
+    const nearbyArmedCiv = neighbors.find(n => n.type === EntityType.CIVILIAN && n.isArmed && getVecDistance(entity.position, n.position) < 0.001);
+    if (nearbyArmedCiv && Math.random() < 0.3) {
+        pool = THOUGHTS.SOLDIER_COMPLAINT;
+    } else {
+        pool = THOUGHTS.SOLDIER;
+    }
   } else {
     // Civilian
     if (entity.isArmed) {
-      pool = THOUGHTS.CIVILIAN_ARMED;
+      pool = Math.random() < 0.5 ? THOUGHTS.ARMED_CIVILIAN : THOUGHTS.CIVILIAN_ARMED;
     } else if (nearbyZombies > 0) {
       pool = THOUGHTS.CIVILIAN_PANIC;
     } else {
@@ -191,16 +197,59 @@ interface GameMapProps {
   initialState: GameState;
   selectedEntityId: string | null;
   onEntitySelect: (id: string | null) => void;
+  followingEntityId: string | null;
+  onCancelFollow: () => void;
 }
 
-const MapEvents: React.FC<{ onMapClick: (latlng: L.LatLng) => void }> = ({ onMapClick }) => {
+const MapEvents: React.FC<{ onMapClick: (latlng: L.LatLng) => void, onDrag: () => void }> = ({ onMapClick, onDrag }) => {
   useMapEvents({
     click(e) { onMapClick(e.latlng); },
+    dragstart() { onDrag(); },
+    movestart(e) { 
+        if (e.hard) return; // ignore programatic
+        const originalEvent = (e as any).originalEvent;
+        if (originalEvent) onDrag(); // only if user triggered
+    }
   });
   return null;
 };
 
-const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState, onAddLog, initialState, selectedEntityId, onEntitySelect }) => {
+const LocateController: React.FC<{ followingEntityId: string | null, entities: GameEntity[], onCancelFollow: () => void }> = ({ followingEntityId, entities, onCancelFollow }) => {
+  const map = useMapEvents({});
+  const lastTargetId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!followingEntityId) {
+        lastTargetId.current = null;
+        return;
+    }
+
+    const entity = entities.find(e => e.id === followingEntityId);
+    if (!entity || entity.isDead) {
+        onCancelFollow();
+        return;
+    }
+
+    if (lastTargetId.current !== followingEntityId) {
+        // Initial transition
+        map.flyTo([entity.position.lat, entity.position.lng], map.getZoom(), {
+          animate: true,
+          duration: 1.0
+        });
+        lastTargetId.current = followingEntityId;
+    } else {
+        // Sticky follow - frame-sync to fix misalignment
+        // Using setView with animate: false inside an effect synced with entities
+        map.setView([entity.position.lat, entity.position.lng], map.getZoom(), {
+            animate: false
+        });
+    }
+  }, [followingEntityId, entities, map]);
+
+  return null;
+};
+
+const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState, onAddLog, initialState, selectedEntityId, onEntitySelect, followingEntityId, onCancelFollow }) => {
   const [centerPos, setCenterPos] = useState<Coordinates>(DEFAULT_LOCATION);
   const [entities, setEntities] = useState<GameEntity[]>([]);
   const [effects, setEffects] = useState<VisualEffect[]>([]); 
@@ -396,7 +445,16 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                          acceleration = addVec(acceleration, getSeekForce(entity, target.position));
                      } else {
                          // Heal
-                         if (entity.healingTimer === 0) audioService.playSound(SoundType.HEAL_START);
+                      if (entity.healingTimer === 0) {
+                          audioService.playSound(SoundType.HEAL_START);
+                          onAddLog({ 
+                              id: `heal-start-${Date.now()}-${entity.id}`, 
+                              sender: `医疗兵 ${entity.name}`, 
+                              senderId: entity.id,
+                              text: `正在对目标进行应急处置，掩护我！`, 
+                              timestamp: Date.now() 
+                          });
+                      }
                          entity.healingTimer += GAME_CONSTANTS.TICK_RATE;
                          if (entity.healingTimer >= GAME_CONSTANTS.HEAL_DURATION) {
                              // Cured!
@@ -404,7 +462,14 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                              target.isTrapped = false; // Release
                              entity.healingTargetId = undefined; // Done
                              entity.healingTimer = 0;
-                             audioService.playSound(SoundType.HEAL_COMPLETE);
+                              audioService.playSound(SoundType.HEAL_COMPLETE);
+                              onAddLog({ 
+                                  id: `heal-done-${Date.now()}-${entity.id}`, 
+                                  sender: `医疗兵 ${entity.name}`, 
+                                  senderId: entity.id,
+                                  text: `治疗完成！该市民已恢复意识。正在寻找下一个生还者。`, 
+                                  timestamp: Date.now() 
+                              });
                          } else {
                              // Healing Effect
                              if (Math.random() < 0.2) {
@@ -503,7 +568,7 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
           }
 
           if (Math.random() < 0.02) { 
-            entity.thought = getRandomThought(entity, [], nearbyThreats);
+            entity.thought = getRandomThought(entity, activeEntities, nearbyThreats);
           }
 
           entity.velocity = addVec(entity.velocity, acceleration);
@@ -511,6 +576,24 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
           entity.position.lat += entity.velocity.x;
           entity.position.lng += entity.velocity.y;
         });
+
+        // 1.1b RANDOM RADIO CHATTER
+        if (Math.random() < 0.02) { // Average once every 2.5s
+            // Include soldiers AND armed civilians
+            const channelUsers = activeEntities.filter(e => e.type === EntityType.SOLDIER || (e.type === EntityType.CIVILIAN && e.isArmed));
+            if (channelUsers.length > 0) {
+                const chatterSource = channelUsers[Math.floor(Math.random() * channelUsers.length)];
+                let senderPrefix = chatterSource.isMedic ? "医疗兵" : chatterSource.type === EntityType.SOLDIER ? "特专队员" : "武装市民";
+                
+                onAddLog({
+                    id: `chatter-${Date.now()}`,
+                    sender: `${senderPrefix} ${chatterSource.name}`,
+                    senderId: chatterSource.id,
+                    text: chatterSource.thought,
+                    timestamp: Date.now()
+                });
+            }
+        }
 
         // 1.2 INTERACTION (Infection & Combat)
         
@@ -642,6 +725,13 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                   if (bestTarget && (maxHits >= 2 || targets.length === 1)) {
                       shooter.ammo = (shooter.ammo || 0) - 1;
                       audioService.playSound(sType);
+                      onAddLog({ 
+                          id: `rocket-fire-${Date.now()}-${shooter.id}`, 
+                          sender: `队员 ${shooter.name}`, 
+                          senderId: shooter.id,
+                          text: `火箭弹发射！由于爆炸范围大，所有人闪避！`, 
+                          timestamp: Date.now() 
+                      });
                       
                       newEffects.push({
                         id: `ex-${Date.now()}-${Math.random()}`,
@@ -663,7 +753,18 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                       activeEntities.forEach(e => {
                         if (getVecDistance(e.position, bestTarget!.position) <= explosionRadius) {
                           e.health -= stats.damage;
-                          if (e.health <= 0) newlyDeadIds.add(e.id);
+                          if (e.health <= 0) {
+                              newlyDeadIds.add(e.id);
+                              if (e.type !== EntityType.ZOMBIE) {
+                                  // FRIENDLY FIRE LOG
+                                  onAddLog({
+                                      id: `ff-${Date.now()}`,
+                                      sender: "指挥部",
+                                      text: `！！！警告：${e.name} 被友军火箭弹击中。停止无差别开火！`,
+                                      timestamp: Date.now()
+                                  });
+                              }
+                          }
                         }
                       });
                   } else {
@@ -681,6 +782,13 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                        audioService.playSound(sType);
                        target.isTrapped = true;
                        target.trappedTimer = GAME_CONSTANTS.NET_DURATION;
+                       onAddLog({ 
+                           id: `net-fire-${Date.now()}-${shooter.id}`, 
+                           sender: `队员 ${shooter.name}`, 
+                           senderId: shooter.id,
+                           text: `目标已捕获！医疗组快跟上！`, 
+                           timestamp: Date.now() 
+                       });
                        newEffects.push({
                             id: `net-${Date.now()}-${Math.random()}`,
                             type: 'SHOT',
@@ -710,12 +818,22 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                 // Pistol / Sniper
                 audioService.playSound(sType);
                 
-                // Set cooldown for sniper
-                if (weaponType === WeaponType.SNIPER) {
-                    shooter.lastFiredTime = Date.now();
-                }
-
                 const target = targets[Math.floor(Math.random() * targets.length)];
+                
+                // Set cooldown for sniper
+                 if (weaponType === WeaponType.SNIPER) {
+                     shooter.lastFiredTime = Date.now();
+                     if (Math.random() < 0.3) {
+                         onAddLog({ 
+                             id: `sniper-fire-${Date.now()}-${shooter.id}`, 
+                             sender: `狙击手 ${shooter.name}`, 
+                             senderId: shooter.id,
+                             text: `距离 ${Math.floor(getVecDistance(shooter.position, target.position) * 100000)}米，风速修正完成。目标已击中。`, 
+                             timestamp: Date.now() 
+                         });
+                     }
+                 }
+
                 target.health -= stats.damage;
                 newEffects.push({
                     id: `shot-${Date.now()}-${Math.random()}`,
@@ -825,7 +943,7 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
     if (selectedTool === ToolType.AIRSTRIKE) {
         if (useResource(GAME_CONSTANTS.COST_AIRSTRIKE) && checkCooldown(ToolType.AIRSTRIKE, GAME_CONSTANTS.COOLDOWN_AIRSTRIKE)) {
             audioService.playSound(SoundType.DEPLOY_ACTION);
-            const killedEntities: string[] = [];
+            const killedEntities: {id: string, name: string, type: EntityType}[] = [];
             // Friendly Fire: Airstrike kills ANY entity in range
             entitiesRef.current.forEach(e => {
               if (!e.isDead && getVecDistance(e.position, clickPos) < GAME_CONSTANTS.AIRSTRIKE_RADIUS) {
@@ -833,11 +951,28 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
                 e.isTrapped = false;
                 e.velocity = {x:0, y:0};
                 e.thought = THOUGHTS.CORPSE[0];
-                killedEntities.push(e.id);
+                killedEntities.push({id: e.id, name: e.name, type: e.type});
               }
             });
+
+            const ffTargets = killedEntities.filter(k => k.type !== EntityType.ZOMBIE);
+            if (ffTargets.length > 0) {
+                onAddLog({
+                    id: `ff-air-${Date.now()}`,
+                    sender: "系统",
+                    text: `[严重警告] 误伤发生：${ffTargets.map(t => t.name).join(', ')} 在空袭中丧生。`,
+                    timestamp: Date.now()
+                });
+            }
             audioService.playSound(SoundType.WEAPON_ROCKET); 
-            onAddLog({ id: Date.now().toString(), sender: '飞行员', text: `打击确认。消灭 ${killedEntities.length} 个目标（含误伤）。`, timestamp: Date.now() });
+            const pilotChatter = [
+                `打击确认。目标区域已覆盖。`,
+                `已投弹。地面部队请确认毁伤情况。`,
+                `这里是猎鹰-1，导弹已离架，正脱离目标区。`,
+                `目标已锁定，地狱火已发射。`
+            ];
+            const text = pilotChatter[Math.floor(Math.random() * pilotChatter.length)];
+            onAddLog({ id: Date.now().toString(), sender: '飞行员', text: `${text} 消灭 ${killedEntities.length} 个目标（含误伤）。`, timestamp: Date.now() });
         }
     } else if (selectedTool === ToolType.SUPPLY_DROP) {
         if (useResource(GAME_CONSTANTS.COST_SUPPLY) && checkCooldown(ToolType.SUPPLY_DROP, GAME_CONSTANTS.COOLDOWN_SUPPLY)) {
@@ -944,7 +1079,8 @@ const GameMap: React.FC<GameMapProps> = ({ selectedTool, isPaused, onUpdateState
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         className="map-tiles"
       />
-      <MapEvents onMapClick={handleMapClick} />
+      <MapEvents onMapClick={handleMapClick} onDrag={onCancelFollow} />
+      <LocateController followingEntityId={followingEntityId} entities={entities} onCancelFollow={onCancelFollow} />
       
       {effects.map(ef => {
         if (ef.type === 'SHOT' && ef.p2) {

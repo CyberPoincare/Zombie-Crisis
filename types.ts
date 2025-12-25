@@ -107,6 +107,7 @@ export interface GameState {
 export interface RadioMessage {
   id: string;
   sender: string;
+  senderId?: string;
   text: string;
   timestamp: number;
 }

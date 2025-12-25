@@ -17,12 +17,13 @@ interface UIOverlayProps {
 const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedTool, onSelectTool, onTogglePause, onReset, onLocateEntity }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
+  const [size, setSize] = useState({ width: 384, height: 224 }); // Initial w-96 (384px) h-56 (224px)
+  const [resizeDir, setResizeDir] = useState<string | null>(null);
   const [, setTick] = useState(0); // Force re-render for cooldown timers
 
   const handleScroll = () => {
     if (scrollRef.current) {
         const { scrollTop, scrollHeight, clientHeight } = scrollRef.current;
-        // Check if we are at the bottom (with 20px threshold for safety)
         isAtBottomRef.current = scrollHeight - scrollTop - clientHeight < 20;
     }
   };
@@ -32,6 +33,40 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [radioLogs]);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+        if (!resizeDir) return;
+        
+        setSize(prev => {
+            let newWidth = prev.width;
+            let newHeight = prev.height;
+            
+            if (resizeDir.includes('right')) {
+                // Since it's bottom-left anchored, dragging right increases width
+                newWidth = Math.max(250, e.clientX - 16); 
+            }
+            if (resizeDir.includes('top')) {
+                // Since it's bottom-left anchored, dragging up (smaller Y) increases height
+                const bottomY = window.innerHeight - 16;
+                newHeight = Math.max(150, bottomY - e.clientY);
+            }
+            
+            return { width: newWidth, height: newHeight };
+        });
+    };
+
+    const handleMouseUp = () => setResizeDir(null);
+
+    if (resizeDir) {
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+    }
+    return () => {
+        window.removeEventListener('mousemove', handleMouseMove);
+        window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [resizeDir]);
 
   useEffect(() => {
       const interval = setInterval(() => setTick(t => t + 1), 100);
@@ -197,8 +232,27 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
 
       {/* Bottom Left: Radio Log */}
       <div className="absolute bottom-4 left-4 z-20 pointer-events-auto hidden lg:flex">
-          <div className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl w-96 h-56 overflow-hidden flex flex-col shadow-2xl">
-              <h3 className="text-[10px] font-bold text-emerald-500 uppercase mb-3 tracking-widest flex items-center gap-2 border-b border-slate-700 pb-2">
+          <div 
+            style={{ width: `${size.width}px`, height: `${size.height}px` }}
+            className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-4 rounded-xl overflow-hidden flex flex-col shadow-2xl relative group/window"
+          >
+              {/* Resize Handles */}
+              <div 
+                className="absolute top-0 right-0 w-4 h-4 cursor-nesw-resize z-30 flex items-center justify-center opacity-0 group-hover/window:opacity-100 transition-opacity"
+                onMouseDown={(e) => { e.preventDefault(); setResizeDir('top-right'); }}
+              >
+                  <div className="w-1.5 h-1.5 bg-slate-500 rounded-full"></div>
+              </div>
+              <div 
+                className="absolute top-0 left-0 right-0 h-1 cursor-n-resize z-30"
+                onMouseDown={(e) => { e.preventDefault(); setResizeDir('top'); }}
+              ></div>
+              <div 
+                className="absolute top-0 right-0 bottom-0 w-1 cursor-e-resize z-30"
+                onMouseDown={(e) => { e.preventDefault(); setResizeDir('right'); }}
+              ></div>
+
+              <h3 className="text-[10px] font-bold text-emerald-500 uppercase mb-3 tracking-widest flex items-center gap-2 border-b border-slate-700 pb-2 shrink-0">
                   <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse shadow-[0_0_8px_#10b981]"></span>
                   实时通讯频道
               </h3>

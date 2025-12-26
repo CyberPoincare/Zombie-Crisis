@@ -1,5 +1,14 @@
 # 开发日志 (Changelog)
 
+## [1.3.2] - 2025-12-26
+
+### 开源集成 (Open Source Integration)
+
+- **GitHub 项目入口**: 在游戏顶部标题栏新增了 GitHub 图标，点击可直接跳转至 [Zombie-Crisis 开源项目地址](https://github.com/CyberPoincare/Zombie-Crisis)。
+- **交互与视觉优化**:
+  - 图标集成了 UI 点击音效，保持交互一致性。
+  - 采用响应式设计，在不同屏幕尺寸下自动调整图标大小，并具备平滑的悬停高亮效果。
+
 ## [1.3.1] - 2025-12-26
 
 ### AI 驱动的深度战术分析 (AI-Powered Tactical Analysis)

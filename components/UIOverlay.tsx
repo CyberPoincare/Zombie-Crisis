@@ -492,7 +492,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
       )}
 
       {/* Bottom Left: Radio Log */}
-      <div className="absolute bottom-28 lg:bottom-4 left-4 z-20 pointer-events-auto flex">
+      <div className="absolute bottom-[calc(7rem+env(safe-area-inset-bottom))] lg:bottom-4 left-4 z-20 pointer-events-auto flex">
           <div 
             style={{ width: `${size.width}px`, height: `${size.height}px` }}
             className="bg-slate-900/80 backdrop-blur-md border border-slate-700/50 p-3 md:p-4 rounded-xl overflow-hidden flex flex-col shadow-2xl relative group/window"
@@ -553,7 +553,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
       </div>
 
       {/* Bottom Right: Toolbar */}
-      <div className="absolute bottom-4 right-4 left-4 lg:left-auto z-20 pointer-events-auto overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
+      <div className="absolute bottom-[calc(1rem+env(safe-area-inset-bottom))] right-4 left-4 lg:left-auto z-20 pointer-events-auto overflow-x-auto overflow-y-hidden [scrollbar-width:none] [-ms-overflow-style:none] [&::-webkit-scrollbar]:hidden">
         <div className="flex gap-3 justify-center lg:justify-end min-w-max px-4 py-2">
             <ToolButton 
                 icon="🖐️" 

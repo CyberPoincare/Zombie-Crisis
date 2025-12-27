@@ -110,7 +110,7 @@ const App: React.FC = () => {
 
   return (
     <React.Suspense fallback={<div className="w-full h-screen bg-gray-900" />}>
-      <div className="relative w-full h-screen bg-gray-900 overflow-hidden">
+      <div className="relative w-full h-[100dvh] bg-gray-900 overflow-hidden">
         {showStartScreen ? (
           <StartScreen onStartGame={handleStartGame} />
         ) : (

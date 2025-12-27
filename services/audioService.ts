@@ -142,6 +142,10 @@ class AudioService {
       case SoundType.UI_CLICK:
         this.playTone(800, 'sine', 0.05, 0.1);
         break;
+      case SoundType.AIRSTRIKE_TICK:
+        this.playTone(1000, 'sine', 0.02, 0.4);
+        this.playTone(2000, 'sine', 0.01, 0.3, 0.01);
+        break;
       case SoundType.UI_SELECT:
         this.playTone(1200, 'sine', 0.05, 0.1);
         break;

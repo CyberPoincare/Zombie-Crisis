@@ -35,8 +35,8 @@ export const GAME_CONSTANTS = {
   SEPARATION_RADIUS: 0.00015, 
   
   // Area of Effect
-  AIRSTRIKE_RADIUS: 0.0012,
-  SUPPLY_RADIUS: 0.0015,
+  AIRSTRIKE_RADIUS: 0.0006,
+  SUPPLY_RADIUS: 0.000375,
   
   // Game Logic
   TICK_RATE: 50, // ms
@@ -61,6 +61,13 @@ export const GAME_CONSTANTS = {
   COOLDOWN_AIRSTRIKE: 120000,// 120s
   COOLDOWN_MEDIC: 80000,     // 80s
   COOLDOWN_TACTICAL_ANALYSIS: 60000, // 60s
+  COOLDOWN_SCAVENGE: 120000, // 120s
+
+  // Scavenge Rewards
+  REWARD_INDUSTRIAL: 100,
+  REWARD_COMMERCIAL: 60,
+  REWARD_RESIDENTIAL: 40,
+  REWARD_PUBLIC: 20,
 
   // Mechanics
   NET_DURATION: 30000, // 30s (in ms, convert to ticks in logic)
@@ -73,6 +80,10 @@ export const GAME_CONSTANTS = {
   // BGM Logic
   COMBAT_COOLDOWN_TICKS: 100, // ~5 seconds (50ms * 100)
   DANGER_VISION_RANGE: 0.0015, // Distance humans feel "danger"
+
+  // Interaction
+  ITEM_PICKUP_RADIUS: 0.00015,
+  SUPPLY_DROP_CURSOR_RADIUS: 0.0003, // approx building size (reduced to 1/4)
 };
 
 export const MOOD_ICONS = {

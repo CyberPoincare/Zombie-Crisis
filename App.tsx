@@ -140,6 +140,9 @@ const App: React.FC = () => {
         onAnalyzeBuilding={(id) => {
             gameMapRef.current?.analyzeBuilding(id);
         }}
+        onScavengeBuilding={(id) => {
+            gameMapRef.current?.scavengeBuilding(id);
+        }}
       />
     </div>
   );

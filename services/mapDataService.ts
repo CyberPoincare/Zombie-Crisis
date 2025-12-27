@@ -34,6 +34,45 @@ const throttleRequest = async () => {
   lastRequestTime = Date.now();
 };
 
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.osm.ch/api/interpreter',
+  'https://overpass.nxtos.glitch.me/api/interpreter'
+];
+
+let currentMirrorIndex = 0;
+
+const fetchWithFallback = async (query: string, timeoutMs: number = 10000): Promise<any> => {
+  let lastError: Error | null = null;
+  
+  // Try up to 3 mirrors
+  for (let i = 0; i < 3; i++) {
+    const mirror = OVERPASS_MIRRORS[(currentMirrorIndex + i) % OVERPASS_MIRRORS.length];
+    const url = `${mirror}?data=${encodeURIComponent(query)}`;
+    
+    try {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      
+      const response = await fetch(url, { signal: controller.signal });
+      clearTimeout(id);
+      
+      if (response.ok) {
+        currentMirrorIndex = (currentMirrorIndex + i) % OVERPASS_MIRRORS.length;
+        return await response.json();
+      }
+      
+      throw new Error(`Overpass Mirror ${mirror} failed: ${response.status}`);
+    } catch (error: any) {
+      console.warn(`Mirror ${mirror} failed, trying next...`, error);
+      lastError = error;
+    }
+  }
+  
+  throw lastError || new Error('All Overpass mirrors failed');
+};
+
 export const mapDataService = {
   async getLocationInfo(coords: Coordinates): Promise<LocationInfo | null> {
     const key = getCacheKey(coords);
@@ -95,12 +134,9 @@ export const mapDataService = {
       await throttleRequest();
       // Overpass API is better for getting a list of features
       // Query nodes with names within 500m
-      const url = `https://overpass-api.de/api/interpreter?data=[out:json];node(around:500,${coords.lat},${coords.lng})[name];out;`;
+      const query = `[out:json];node(around:500,${coords.lat},${coords.lng})[name];out;`;
+      const data = await fetchWithFallback(query);
       
-      const response = await fetch(url);
-      if (!response.ok) throw new Error('Overpass Network response was not ok');
-      
-      const data = await response.json();
       const names = data.elements
         .map((e: any) => e.tags.name)
         .filter((name: string) => name && name.length > 1);
@@ -116,13 +152,10 @@ export const mapDataService = {
   async getBuildingGeometries(coords: Coordinates): Promise<Building[]> {
     try {
       await throttleRequest();
-      // Fetch buildings within 400m (reduced from 600m to avoid timeouts)
-      const url = `https://overpass-api.de/api/interpreter?data=[out:json];(way(around:400,${coords.lat},${coords.lng})[building];);out geom;`;
+      // Fetch buildings within 400m
+      const query = `[out:json];(way(around:400,${coords.lat},${coords.lng})[building];);out geom;`;
+      const data = await fetchWithFallback(query, 15000); // Higher timeout for complex geometries
       
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`Overpass Network response was not ok: ${response.status}`);
-      
-      const data = await response.json();
       const buildings: Building[] = data.elements
         .filter((e: any) => e.type === 'way' && e.geometry)
         .map((e: any) => ({

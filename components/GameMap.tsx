@@ -1,8 +1,8 @@
 
 import React, { useEffect, useState, useRef, useMemo, useCallback, useImperativeHandle, forwardRef } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents, Polyline, Circle, Polygon } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMapEvents, Polyline, Circle, Polygon, Pane } from 'react-leaflet';
 import L from 'leaflet';
-import { Coordinates, EntityType, CivilianType, GameEntity, GameState, RadioMessage, ToolType, Vector, WeaponType, VisualEffect, SoundType, Building, BGMState } from '../types';
+import { Coordinates, EntityType, CivilianType, GameEntity, GameState, RadioMessage, ToolType, Vector, WeaponType, VisualEffect, SoundType, Building, BGMState, WeaponItem, StrikeZone, Crater } from '../types';
 import { GAME_CONSTANTS, DEFAULT_LOCATION, CHINESE_SURNAMES, CHINESE_GIVEN_NAMES_MALE, CHINESE_GIVEN_NAMES_FEMALE, THOUGHTS, WEAPON_STATS, WEAPON_SYMBOLS, MOOD_ICONS } from '../constants';
 import { generateRadioChatter, generateTacticalAnalysis } from '../services/geminiService';
 import { audioService } from '../services/audioService';
@@ -307,8 +307,28 @@ const EntityMarker = React.memo(({ entity, lat, lng, isSelected, onSelect }: {
   );
 });
 
+const WeaponMarker = React.memo(({ weapon }: { weapon: WeaponItem }) => {
+  const icon = useMemo(() => {
+    const symbol = WEAPON_SYMBOLS[weapon.type];
+    const color = WEAPON_STATS[weapon.type].color;
+    return L.divIcon({
+      className: 'bg-transparent',
+      html: `
+        <div class="flex items-center justify-center w-6 h-6 bg-slate-800/90 border border-yellow-500/50 rounded-full shadow-[0_0_10px_rgba(234,179,8,0.3)] animate-pulse">
+          <span style="color: ${color}" class="text-[10px] font-bold">${symbol}</span>
+        </div>
+      `,
+      iconSize: [24, 24],
+      iconAnchor: [12, 12],
+    });
+  }, [weapon.type]);
+
+  return <Marker position={[weapon.position.lat, weapon.position.lng]} icon={icon} interactive={false} />;
+});
+
 export interface GameMapRef {
   analyzeBuilding: (id: string) => void;
+  scavengeBuilding: (id: string) => void;
 }
 
 interface GameMapProps {
@@ -326,7 +346,12 @@ interface GameMapProps {
   onCancelFollow: () => void;
 }
 
-const MapEvents: React.FC<{ onMapClick: (latlng: L.LatLng) => void, onDrag: () => void, onMoveEnd: (center: Coordinates) => void }> = ({ onMapClick, onDrag, onMoveEnd }) => {
+const MapEvents: React.FC<{ 
+  onMapClick: (latlng: L.LatLng) => void, 
+  onDrag: () => void, 
+  onMoveEnd: (center: Coordinates) => void,
+  onMouseMove?: (latlng: L.LatLng) => void
+}> = ({ onMapClick, onDrag, onMoveEnd, onMouseMove }) => {
   useMapEvents({
     click(e) { onMapClick(e.latlng); },
     dragstart() { onDrag(); },
@@ -338,6 +363,9 @@ const MapEvents: React.FC<{ onMapClick: (latlng: L.LatLng) => void, onDrag: () =
     moveend(e) {
       const center = e.target.getCenter();
       onMoveEnd({ lat: center.lat, lng: center.lng });
+    },
+    mousemove(e) {
+      onMouseMove?.(e.latlng);
     }
   });
   return null;
@@ -383,10 +411,17 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
   const [centerPos, setCenterPos] = useState<Coordinates>(DEFAULT_LOCATION);
   const [entities, setEntities] = useState<GameEntity[]>([]);
   const [effects, setEffects] = useState<VisualEffect[]>([]); 
+  const [droppedWeapons, setDroppedWeapons] = useState<WeaponItem[]>([]);
+  const [mousePos, setMousePos] = useState<Coordinates | null>(null);
+  const [strikeZones, setStrikeZones] = useState<StrikeZone[]>([]);
+  const [craters, setCraters] = useState<Crater[]>([]);
   const [initialized, setInitialized] = useState(false);
   
   const entitiesRef = useRef<GameEntity[]>([]);
-  const stateRef = useRef<GameState>(initialState);
+  const droppedWeaponsRef = useRef<WeaponItem[]>([]);
+  const strikeZonesRef = useRef<StrikeZone[]>([]);
+  const cratersRef = useRef<Crater[]>([]);
+  const stateRef = useRef<GameState>({ ...initialState, droppedWeapons: [] });
   const pausedRef = useRef(isPaused);
   const selectedIdRef = useRef(selectedEntityId);
   const selectedBuildingIdRef = useRef(selectedBuildingId);
@@ -511,9 +546,22 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
         try {
             // Get geographic context
             const [locationInfo, nearbyFeatures] = await Promise.all([
-                mapDataService.getLocationInfo(pos),
-                mapDataService.getNearbyFeatures(pos)
+                mapDataService.getLocationInfo(pos).catch(e => {
+                    console.error("Location info fetch failed:", e);
+                    return null;
+                }),
+                mapDataService.getNearbyFeatures(pos).catch(e => {
+                    console.error("Nearby features fetch failed:", e);
+                    return [];
+                })
             ]);
+
+            if (!locationInfo && nearbyFeatures.length === 0) {
+                addLog({
+                    sender: '指挥部',
+                    text: `警告：目标区域 ${b.name} 的地理元数据载入失败。将使用本地缓存及战术基准数据进行分析。`
+                });
+            }
 
             // Get tactical stats
             const radius = 0.003;
@@ -555,6 +603,45 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
             setBuildingsSyncTrigger(prev => prev + 1);
             onUpdateState({...stateRef.current});
         }
+    },
+    scavengeBuilding: (id: string) => {
+        const b = buildingsRef.current.find(b => b.id === id);
+        if (!b || !b.analysis) return;
+
+        const now = Date.now();
+        if (b.analysis.scavengeCooldownEnd && now < b.analysis.scavengeCooldownEnd) return;
+
+        // Calculate Reward
+        let reward = GAME_CONSTANTS.REWARD_PUBLIC;
+        const type = b.type.toLowerCase();
+        if (type.includes('industrial') || type.includes('factory') || type.includes('warehouse')) {
+            reward = GAME_CONSTANTS.REWARD_INDUSTRIAL;
+        } else if (type.includes('office') || type.includes('commercial') || type.includes('retail') || type.includes('mall')) {
+            reward = GAME_CONSTANTS.REWARD_COMMERCIAL;
+        } else if (type.includes('apartments') || type.includes('residential') || type.includes('house')) {
+            reward = GAME_CONSTANTS.REWARD_RESIDENTIAL;
+        }
+
+        // Apply reward
+        const currentState = stateRef.current;
+        onUpdateState({
+            ...currentState,
+            resources: currentState.resources + reward
+        });
+
+        // Update building state
+        b.analysis.scavengeCooldownEnd = now + GAME_CONSTANTS.COOLDOWN_SCAVENGE;
+        b.analysis.scavengeCount = (b.analysis.scavengeCount || 0) + 1;
+
+        // Log result
+        addLog({
+            sender: '搜救队',
+            text: `从 ${b.name} 搜寻到了价值 $${reward} 的物资。`
+        });
+
+        // Sync triggers
+        setBuildingsSyncTrigger(prev => prev + 1);
+        audioService.playSound(SoundType.DEPLOY_ACTION);
     }
   }));
 
@@ -716,21 +803,77 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
     if (!initialized || stateRef.current.gameResult) return;
 
     const intervalId = setInterval(() => {
-      if (!pausedRef.current) {
+        // Multi-Tick Recovery
         tickRef.current++;
+
+        // Process Strike Zones
+        const now = Date.now();
+        const activeStrikes = strikeZonesRef.current.filter(s => {
+            const elapsed = now - s.startTime;
+            
+            // Play ticking sound every second
+            if (elapsed > 0 && elapsed < s.duration && Math.floor(elapsed / 1000) !== Math.floor((elapsed - GAME_CONSTANTS.TICK_RATE) / 1000)) {
+                audioService.playSound(SoundType.AIRSTRIKE_TICK);
+            }
+
+            if (elapsed >= s.duration) {
+                // Strike impact!
+                const victims = entitiesRef.current.filter(e => !e.isDead && getVecDistance(e.position, s.position) < s.radius);
+                victims.forEach(v => {
+                    v.isDead = true;
+                    v.health = 0;
+                });
+
+                // Spawn Crater
+                const crater: Crater = {
+                    id: `crater-${Date.now()}`,
+                    position: s.position,
+                    radius: s.radius,
+                    timestamp: now
+                };
+                cratersRef.current.push(crater);
+                setCraters([...cratersRef.current]);
+
+                // Explosion Effect
+                const effect: VisualEffect = {
+                    id: `strike-fx-${Date.now()}`,
+                    type: 'EXPLOSION',
+                    p1: s.position,
+                    color: '#EF4444',
+                    radius: s.radius * 2,
+                    timestamp: now
+                };
+                setEffects(prev => [...prev, effect]);
+
+                addLog({
+                    sender: '战术指挥中心',
+                    text: `打击波次已到达。确认摧毁半径内所有目标 (${victims.length} 名)。区域环境已遭受结构性损毁。`
+                });
+
+                audioService.playSound(SoundType.WEAPON_ROCKET, true);
+                return false; // Remove strike zone
+            }
+            return true;
+        });
+
+        if (activeStrikes.length !== strikeZonesRef.current.length) {
+            strikeZonesRef.current = activeStrikes;
+            setStrikeZones([...activeStrikes]);
+        }
         const tick = tickRef.current;
         
-        const allEntities = entitiesRef.current;
-        const activeEntities = allEntities.filter(e => !e.isDead); 
-        const zombies = activeEntities.filter(e => e.type === EntityType.ZOMBIE);
-        const humans = activeEntities.filter(e => e.type !== EntityType.ZOMBIE);
-        const newEffects: VisualEffect[] = [];
-        const newlyDeadIds = new Set<string>();
-        const curedIds = new Set<string>();
-        const newlyInfectedIds = new Set<string>();
-        
-        // 1.1 MOVEMENT & BEHAVIOR
-        activeEntities.forEach(entity => {
+        if (!pausedRef.current) {
+            const allEntities = entitiesRef.current;
+            const activeEntities = allEntities.filter(e => !e.isDead); 
+            const zombies = activeEntities.filter(e => e.type === EntityType.ZOMBIE);
+            const humans = activeEntities.filter(e => e.type !== EntityType.ZOMBIE);
+            const newEffects: VisualEffect[] = [];
+            const newlyDeadIds = new Set<string>();
+            const curedIds = new Set<string>();
+            const newlyInfectedIds = new Set<string>();
+            
+            // 1.1 MOVEMENT & BEHAVIOR
+            activeEntities.forEach(entity => {
           // Trapped entities don't move
           if (entity.isTrapped) {
               entity.trappedTimer -= GAME_CONSTANTS.TICK_RATE;
@@ -924,6 +1067,36 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
               const distFromCenter = getVecDistance(entity.position, centerPos);
               if (distFromCenter > GAME_CONSTANTS.SPAWN_RADIUS * 1.2) {
                 acceleration = addVec(acceleration, multVec(getSeekForce(entity, centerPos), 0.5));
+              }
+            }
+
+            // Weapon Pickup Logic for Civilians
+            if (entity.type === EntityType.CIVILIAN && !entity.isDead && !entity.isArmed) {
+              const nearestWeapon = droppedWeaponsRef.current.find(w => 
+                getVecDistance(entity.position, w.position) < GAME_CONSTANTS.VISION_RANGE_HUMAN
+              );
+              
+              if (nearestWeapon) {
+                const distToWeapon = getVecDistance(entity.position, nearestWeapon.position);
+                if (distToWeapon < GAME_CONSTANTS.ITEM_PICKUP_RADIUS) {
+                  // Pick up weapon
+                  entity.isArmed = true;
+                  entity.weaponType = nearestWeapon.type;
+                  if (entity.weaponType === WeaponType.ROCKET) entity.ammo = GAME_CONSTANTS.ROCKET_AMMO_LIMIT;
+                  entity.thought = `拿到了${WEAPON_STATS[entity.weaponType].name}！跟它们拼了！`;
+                  entity.moodIcon = "🔫";
+                  entity.moodTimer = GAME_CONSTANTS.MOOD_DURATION;
+                  
+                  // Remove weapon from map
+                  droppedWeaponsRef.current = droppedWeaponsRef.current.filter(w => w.id !== nearestWeapon.id);
+                  setDroppedWeapons([...droppedWeaponsRef.current]);
+                  
+                  audioService.playSound(SoundType.UI_CLICK); 
+                } else {
+                  // Move towards weapon
+                  acceleration = addVec(acceleration, multVec(getSeekForce(entity, nearestWeapon.position), 1.5));
+                  maxSpeed *= GAME_CONSTANTS.MULT_SPRINT;
+                }
               }
             }
           }
@@ -1331,7 +1504,6 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
         entitiesRef.current = allEntities; 
         setEntities([...entitiesRef.current]);
         
-        const now = Date.now();
         setEffects(prev => [...prev.filter(e => now - e.timestamp < 200), ...newEffects]);
       } 
 
@@ -1401,7 +1573,7 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
     }, GAME_CONSTANTS.TICK_RATE);
 
     return () => clearInterval(intervalId);
-  }, [initialized, centerPos, onUpdateState]); 
+  }, [initialized, centerPos, onUpdateState, strikeZonesRef]);
 
   // --- PLAYER INPUT ---
   const handleMapClick = (latlng: L.LatLng) => {
@@ -1437,63 +1609,54 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
     if (selectedTool === ToolType.AIRSTRIKE) {
         if (useResource(GAME_CONSTANTS.COST_AIRSTRIKE) && checkCooldown(ToolType.AIRSTRIKE, GAME_CONSTANTS.COOLDOWN_AIRSTRIKE)) {
             audioService.playSound(SoundType.DEPLOY_ACTION, true);
-            const killedEntities: {id: string, name: string, type: EntityType}[] = [];
-            // Friendly Fire: Airstrike kills ANY entity in range
-            entitiesRef.current.forEach(e => {
-              if (!e.isDead && getVecDistance(e.position, clickPos) < GAME_CONSTANTS.AIRSTRIKE_RADIUS) {
-                e.isDead = true;
-                e.isTrapped = false;
-                e.velocity = {x:0, y:0};
-                e.thought = THOUGHTS.CORPSE[0];
-                killedEntities.push({id: e.id, name: e.name, type: e.type});
-              }
-            });
+            
+            const strike: StrikeZone = {
+                id: `strike-${Date.now()}`,
+                position: { lat: latlng.lat, lng: latlng.lng },
+                radius: GAME_CONSTANTS.AIRSTRIKE_RADIUS,
+                startTime: Date.now(),
+                duration: 5000
+            };
 
-            const ffTargets = killedEntities.filter(k => k.type !== EntityType.ZOMBIE);
-            if (ffTargets.length > 0) {
-                onAddLog({
-                    id: `ff-air-${Date.now()}`,
-                    sender: "系统",
-                    text: `[严重警告] 误伤发生：${ffTargets.map(t => t.name).join(', ')} 在空袭中丧生。`,
-                    timestamp: Date.now()
-                });
-            }
-            audioService.playSound(SoundType.WEAPON_ROCKET, true); 
-            const pilotChatter = [
-                `打击确认。目标区域已覆盖。`,
-                `已投弹。地面部队请确认毁伤情况。`,
-                `这里是猎鹰-1，导弹已离架，正脱离目标区。`,
-                `目标已锁定，地狱火已发射。`
-            ];
-            const text = pilotChatter[Math.floor(Math.random() * pilotChatter.length)];
-            onAddLog({ id: Date.now().toString(), sender: '飞行员', text: `${text} 消灭 ${killedEntities.length} 个目标（含误伤）。`, timestamp: Date.now() });
+            strikeZonesRef.current.push(strike);
+            setStrikeZones([...strikeZonesRef.current]);
+
+            addLog({
+                sender: '指挥部',
+                text: `收到。空袭计划已确认，战机预计5秒后抵达目标区域。所有友军立即撤离！`
+            });
+            
+            audioService.playSound(SoundType.DEPLOY_ACTION);
             onSelectTool(ToolType.NONE);
         }
     } else if (selectedTool === ToolType.SUPPLY_DROP) {
         if (useResource(GAME_CONSTANTS.COST_SUPPLY) && checkCooldown(ToolType.SUPPLY_DROP, GAME_CONSTANTS.COOLDOWN_SUPPLY)) {
             audioService.playSound(SoundType.DEPLOY_ACTION, true);
-            const candidates = entitiesRef.current.filter(e => 
-              !e.isDead && e.type === EntityType.CIVILIAN && !e.isInfected && getVecDistance(e.position, clickPos) < GAME_CONSTANTS.SUPPLY_RADIUS
-            );
             
-            const luckySurvivors = candidates.sort(() => 0.5 - Math.random()).slice(0, 4);
-            
-            luckySurvivors.forEach(e => {
-               e.isArmed = true;
-               e.weaponType = getRandomWeapon();
-               if (e.weaponType === WeaponType.ROCKET) e.ammo = GAME_CONSTANTS.ROCKET_AMMO_LIMIT;
-               e.thought = `拿到了${WEAPON_STATS[e.weaponType].name}！跟它们拼了！`;
-            });
-
-            if (luckySurvivors.length > 0) {
-                mapDataService.getLocationInfo(clickPos).then(info => {
-                  generateRadioChatter(stateRef.current, clickPos, 'RESCUE', info || undefined).then(text => {
-                    addLog({ sender: '运输机', text: `${text} (${luckySurvivors.length} 名平民获救于 ${info?.name || '目标区'})` });
-                  });
+            // Spawn 3 random weapons in the area
+            const newWeapons: WeaponItem[] = [];
+            for (let i = 0; i < 3; i++) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = Math.random() * GAME_CONSTANTS.SUPPLY_RADIUS;
+                newWeapons.push({
+                    id: `weapon-${Date.now()}-${i}`,
+                    type: getRandomWeapon(),
+                    position: {
+                        lat: clickPos.lat + r * Math.cos(angle),
+                        lng: clickPos.lng + r * Math.sin(angle)
+                    },
+                    timestamp: Date.now()
                 });
-            } else {
-                addLog({ sender: '系统', text: `投放位置无幸存者接收。` });
             }
+            
+            droppedWeaponsRef.current = [...droppedWeaponsRef.current, ...newWeapons];
+            setDroppedWeapons(droppedWeaponsRef.current);
+            
+            addLog({ 
+                sender: '系统', 
+                text: `武器空投已就绪。正在目标区域投放 3 件装备，请求幸存者就近夺取。` 
+            });
+            
             onSelectTool(ToolType.NONE);
         }
 
@@ -1578,14 +1741,140 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
       zoomControl={false}
       scrollWheelZoom={true}
       doubleClickZoom={false}
-      className="h-full w-full z-0 bg-gray-900 cursor-crosshair"
+      className={`h-full w-full z-0 bg-gray-900 ${selectedTool === ToolType.SUPPLY_DROP || selectedTool === ToolType.AIRSTRIKE ? 'cursor-none' : 'cursor-crosshair'}`}
     >
       <TileLayer
         attribution='&copy; OSM'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         className="map-tiles"
       />
-      <MapEvents onMapClick={handleMapClick} onDrag={onCancelFollow} onMoveEnd={fetchBuildings} />
+      <MapEvents 
+        onMapClick={handleMapClick} 
+        onDrag={onCancelFollow} 
+        onMoveEnd={fetchBuildings} 
+        onMouseMove={setMousePos}
+      />
+
+      {/* Tool Cursors */}
+      {mousePos && selectedTool === ToolType.SUPPLY_DROP && (
+          <Circle 
+              center={[mousePos.lat, mousePos.lng]} 
+              radius={GAME_CONSTANTS.SUPPLY_RADIUS * 111320} // approx convert degrees to meters for Leaflet
+              pathOptions={{ dashArray: '5, 10', color: '#3B82F6', fillColor: '#3B82F6', fillOpacity: 0.1 }}
+          />
+      )}
+      {mousePos && selectedTool === ToolType.AIRSTRIKE && (
+          <Circle 
+              center={[mousePos.lat, mousePos.lng]} 
+              radius={GAME_CONSTANTS.AIRSTRIKE_RADIUS * 111320}
+              pathOptions={{ dashArray: '5, 10', color: '#EF4444', fillColor: '#EF4444', fillOpacity: 0.1 }}
+          />
+      )}
+
+      {/* Craters - Rendered in a separate pane to stay under UI elements */}
+      <Pane name="crater-pane" style={{ zIndex: 350 }}>
+          {craters.map(c => (
+              <Marker 
+                  key={c.id}
+                  position={[c.position.lat, c.position.lng]}
+                  pane="crater-pane"
+                  icon={L.divIcon({
+                      className: 'bg-transparent',
+                      html: `
+                           <div style="
+                               width: ${c.radius * 222640}px; 
+                               height: ${c.radius * 222640}px; 
+                               background: radial-gradient(circle, #374151 0%, #374151 20%, rgba(0, 0, 0, 0) 100%);
+                               border-radius: 50%;
+                               transform: translate(-50%, -50%);
+                               overflow: hidden;
+                           ">
+                                ${Array.from({length: 8}).map((_, i) => {
+                                    // Seeded random for stable cracks
+                                    const seed = c.id + i;
+                                    let h = 0;
+                                    for (let j = 0; j < seed.length; j++) h = (Math.imul(31, h) + seed.charCodeAt(j)) | 0;
+                                    const seededRandom = () => {
+                                        h = (Math.imul(h, 48271) % 2147483647);
+                                        return (h - 1) / 2147483646;
+                                    };
+
+                                    const angle = (i * 45) + (seededRandom() * 20 - 10);
+                                    const opacity = 0.3 + seededRandom() * 0.4;
+                                    const length = 40 + seededRandom() * 20;
+                                    const delay = seededRandom() * 2;
+                                    return `
+                                        <div style="
+                                            position: absolute;
+                                            top: 50%;
+                                            left: 50%;
+                                            width: ${length}%;
+                                            height: 2px;
+                                            background: rgba(0,0,0,${opacity});
+                                            transform-origin: left center;
+                                            transform: rotate(${angle}deg);
+                                            clip-path: polygon(0% 0%, 100% 50%, 0% 100%);
+                                            animation: crack-opacity 3s ease-in-out infinite;
+                                            animation-delay: ${delay}s;
+                                        "></div>
+                                    `;
+                                }).join('')}
+                           </div>
+                           <style>
+                                @keyframes crack-opacity {
+                                    0%, 100% { opacity: 0.8; }
+                                    50% { opacity: 0.2; }
+                                }
+                           </style>
+                       `,
+                      iconSize: [0, 0],
+                      iconAnchor: [0, 0]
+                  })}
+                  interactive={false}
+              />
+          ))}
+      </Pane>
+
+      {/* Strike Zones */}
+      {strikeZones.map(s => {
+          const elapsed = Date.now() - s.startTime;
+          const remaining = Math.max(0, Math.ceil((s.duration - elapsed) / 1000));
+          const isFlashing = (Math.floor(elapsed / 250) % 2 === 0);
+          
+          return (
+              <div key={s.id}>
+                  <Circle 
+                      center={[s.position.lat, s.position.lng]} 
+                      radius={s.radius * 111320}
+                      pathOptions={{ 
+                          color: isFlashing ? '#EF4444' : '#FBBF24', 
+                          fillColor: '#EF4444', 
+                          fillOpacity: 0.2,
+                          weight: 3
+                      }}
+                  />
+                  <Marker 
+                      position={[s.position.lat, s.position.lng]}
+                      icon={L.divIcon({
+                          className: 'bg-transparent',
+                          html: `
+                              <div class="flex flex-col items-center justify-center">
+                                  <div class="text-red-500 font-black text-2xl drop-shadow-[0_2px_4px_rgba(0,0,0,0.8)] animate-pulse">
+                                      ${remaining}秒
+                                  </div>
+                                  <div class="text-white text-[10px] font-bold bg-red-600 px-2 py-0.5 rounded animate-bounce whitespace-nowrap">
+                                      警告：空中打击
+                                  </div>
+                              </div>
+                          `,
+                          iconSize: [120, 60],
+                          iconAnchor: [60, 30]
+                      })}
+                      interactive={false}
+                  />
+              </div>
+          );
+      })}
       
       {/* Buildings Layer */}
       {buildingsRef.current.map(b => (
@@ -1609,6 +1898,11 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
             }
           }}
         />
+      ))}
+
+      {/* Weapons Layer */}
+      {droppedWeapons.map(w => (
+        <WeaponMarker key={w.id} weapon={w} />
       ))}
 
       <LocateController followingEntityId={followingEntityId} entities={entities} onCancelFollow={onCancelFollow} />

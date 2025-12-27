@@ -16,6 +16,8 @@ export interface Building {
     };
     cooldownEnd?: number;
     isAnalyzing?: boolean;
+    scavengeCooldownEnd?: number;
+    scavengeCount?: number;
   };
 }
 
@@ -79,7 +81,8 @@ export enum SoundType {
   // Zombie Sounds
   ZOM_ROAR = 'ZOM_ROAR',
   ZOM_BITE = 'ZOM_BITE',
-  ZOM_FIGHT = 'ZOM_FIGHT'
+  ZOM_FIGHT = 'ZOM_FIGHT',
+  AIRSTRIKE_TICK = 'AIRSTRIKE_TICK'
 }
 
 export interface Coordinates {
@@ -136,6 +139,28 @@ export interface GameEntity {
   wasInsideBuilding?: boolean; // For boundary transition detection
 }
 
+export interface WeaponItem {
+  id: string;
+  type: WeaponType;
+  position: Coordinates;
+  timestamp: number;
+}
+
+export interface StrikeZone {
+  id: string;
+  position: Coordinates;
+  radius: number;
+  startTime: number;
+  duration: number; // typically 5000ms
+}
+
+export interface Crater {
+  id: string;
+  position: Coordinates;
+  radius: number;
+  timestamp: number;
+}
+
 export interface GameState {
   isPlaying: boolean;
   isPaused: boolean;
@@ -151,6 +176,8 @@ export interface GameState {
   cooldowns: {
     [key in ToolType]?: number;
   };
+  
+  droppedWeapons: WeaponItem[];
 }
 
 export interface RadioMessage {

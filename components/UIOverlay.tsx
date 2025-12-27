@@ -15,9 +15,10 @@ interface UIOverlayProps {
   followingEntityId: string | null;
   onToggleFollow: (id: string) => void;
   onAnalyzeBuilding?: (id: string) => void;
+  onScavengeBuilding?: (id: string) => void;
 }
 
-const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedTool, onSelectTool, onTogglePause, onReset, onLocateEntity, followingEntityId, onToggleFollow, onAnalyzeBuilding }) => {
+const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedTool, onSelectTool, onTogglePause, onReset, onLocateEntity, followingEntityId, onToggleFollow, onAnalyzeBuilding, onScavengeBuilding }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const isAtBottomRef = useRef(true);
   const [size, setSize] = useState({ width: 384, height: 224 });
@@ -99,6 +100,24 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
       const interval = setInterval(() => setTick(t => t + 1), 100);
       return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+            if (selectedTool !== ToolType.NONE) {
+                audioService.playSound(SoundType.UI_CLICK);
+                onSelectTool(ToolType.NONE);
+                // Blur the active element to remove persistent focus ring
+                if (document.activeElement instanceof HTMLElement) {
+                    document.activeElement.blur();
+                }
+            }
+        }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedTool, onSelectTool]);
 
   const totalPop = gameState.healthyCount + gameState.infectedCount + gameState.soldierCount;
   const pctHealthy = totalPop > 0 ? (gameState.healthyCount / totalPop) * 100 : 0;
@@ -241,6 +260,29 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
 
                   {b.analysis && (
                       <div className="space-y-3 animate-fade-in">
+                          {/* Scavenge Button */}
+                          <div className="pt-2 border-t border-slate-700/50">
+                              {(() => {
+                                  const sCooldownEnd = b.analysis.scavengeCooldownEnd || 0;
+                                  const sRemaining = Math.max(0, Math.ceil((sCooldownEnd - now) / 1000));
+                                  const sOnCooldown = sRemaining > 0;
+                                  
+                                  return (
+                                      <button 
+                                          onClick={() => { audioService.playSound(SoundType.UI_CLICK); onScavengeBuilding?.(b.id); }}
+                                          disabled={sOnCooldown || isAnalyzing}
+                                          className={`w-full py-2 rounded-lg font-bold text-xs transition-all flex items-center justify-center gap-2 border ${
+                                              (sOnCooldown || isAnalyzing)
+                                              ? 'bg-slate-800/50 border-slate-700 text-slate-500 cursor-not-allowed' 
+                                              : 'bg-emerald-500/10 border-emerald-500/50 text-emerald-400 hover:bg-emerald-500/20 active:scale-95 shadow-[0_0_15px_rgba(16,185,129,0.1)]'
+                                          }`}
+                                      >
+                                          {sOnCooldown ? `📦 搜寻资源中 (${sRemaining}s)` : '📦 搜寻可用资源'}
+                                      </button>
+                                  );
+                              })()}
+                          </div>
+
                           <div className="bg-blue-500/10 border border-blue-500/30 p-3 rounded-lg space-y-2">
                               <div className="flex items-center gap-2">
                                   <span className="text-[10px] font-black text-blue-400 uppercase tracking-widest">生存指南 (SURVIVAL GUIDE)</span>
@@ -585,7 +627,7 @@ const ToolButton: React.FC<{
             className={`
                 group relative flex flex-col items-center justify-center 
                 w-16 h-16 xs:w-20 xs:h-20 sm:w-32 sm:h-32 rounded-xl sm:rounded-2xl transition-all duration-200 
-                border shadow-xl shrink-0 overflow-hidden
+                border shadow-xl shrink-0 overflow-hidden focus:outline-none
                 ${isActive 
                     ? 'bg-slate-800 border-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.4)] scale-105 z-10' 
                     : 'bg-slate-800/80 border-slate-600 hover:bg-slate-700 hover:border-slate-500 hover:-translate-y-1'

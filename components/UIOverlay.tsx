@@ -566,7 +566,18 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                 cost={0} 
                 cooldownEnd={0}
                 isActive={selectedTool === ToolType.NONE} 
+                gameState={gameState}
                 onClick={() => { audioService.playSound(SoundType.UI_CLICK); onSelectTool(ToolType.NONE); }} 
+            />
+            <ToolButton 
+                icon="📢" 
+                line1={t('broadcast_announcement_1')} 
+                line2={t('broadcast_announcement_2')}
+                cost={0} 
+                cooldownEnd={0}
+                isActive={selectedTool === ToolType.BROADCAST_ANNOUNCEMENT} 
+                gameState={gameState}
+                onClick={() => { audioService.playSound(SoundType.UI_CLICK); onSelectTool(ToolType.BROADCAST_ANNOUNCEMENT); }} 
             />
             <ToolButton 
                 icon="📦" 
@@ -575,6 +586,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                 cost={GAME_CONSTANTS.COST_SUPPLY} 
                 cooldownEnd={gameState.cooldowns[ToolType.SUPPLY_DROP] || 0}
                 isActive={selectedTool === ToolType.SUPPLY_DROP} 
+                gameState={gameState}
                 onClick={() => { audioService.playSound(SoundType.UI_CLICK); onSelectTool(ToolType.SUPPLY_DROP); }} 
             />
             <ToolButton 
@@ -584,6 +596,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                 cost={GAME_CONSTANTS.COST_SPEC_OPS} 
                 cooldownEnd={gameState.cooldowns[ToolType.SPEC_OPS] || 0}
                 isActive={selectedTool === ToolType.SPEC_OPS} 
+                gameState={gameState}
                 onClick={() => { audioService.playSound(SoundType.UI_CLICK); onSelectTool(ToolType.SPEC_OPS); }} 
             />
             <ToolButton 
@@ -593,6 +606,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                 cost={GAME_CONSTANTS.COST_MEDIC} 
                 cooldownEnd={gameState.cooldowns[ToolType.MEDIC_TEAM] || 0}
                 isActive={selectedTool === ToolType.MEDIC_TEAM} 
+                gameState={gameState}
                 onClick={() => { audioService.playSound(SoundType.UI_CLICK); onSelectTool(ToolType.MEDIC_TEAM); }} 
             />
             <ToolButton 
@@ -602,6 +616,7 @@ const UIOverlay: React.FC<UIOverlayProps> = ({ gameState, radioLogs, selectedToo
                 cost={GAME_CONSTANTS.COST_AIRSTRIKE} 
                 cooldownEnd={gameState.cooldowns[ToolType.AIRSTRIKE] || 0}
                 isActive={selectedTool === ToolType.AIRSTRIKE} 
+                gameState={gameState}
                 onClick={() => { audioService.playSound(SoundType.UI_CLICK); onSelectTool(ToolType.AIRSTRIKE); }} 
             />
         </div>
@@ -617,17 +632,21 @@ const ToolButton: React.FC<{
     cost: number, 
     cooldownEnd: number,
     isActive: boolean, 
+    gameState: GameState,
     onClick: () => void
-}> = ({icon, line1, line2, cost, cooldownEnd, isActive, onClick}) => {
+}> = ({icon, line1, line2, cost, cooldownEnd, isActive, gameState, onClick}) => {
     
     const now = Date.now();
     const remaining = Math.max(0, Math.ceil((cooldownEnd - now) / 1000));
     const onCooldown = remaining > 0;
+    
+    // Disable buttons if infection not detected, EXCEPT for the Move/Observe tool (cost 0)
+    const isDisabled = onCooldown || (cost > 0 && !gameState.infectionDetected);
 
     return (
         <button 
             onClick={onClick}
-            disabled={onCooldown}
+            disabled={isDisabled}
             className={`
                 group relative flex flex-col items-center justify-center 
                 w-16 h-16 xs:w-20 xs:h-20 sm:w-32 sm:h-32 rounded-xl sm:rounded-2xl transition-all duration-200 
@@ -636,7 +655,7 @@ const ToolButton: React.FC<{
                     ? 'bg-slate-800 border-blue-400 shadow-[0_0_20px_rgba(59,130,246,0.4)] scale-105 z-10' 
                     : 'bg-slate-800/80 border-slate-600 hover:bg-slate-700 hover:border-slate-500 hover:-translate-y-1'
                 }
-                ${onCooldown ? 'opacity-70 cursor-not-allowed' : ''}
+                ${isDisabled ? 'opacity-70 cursor-not-allowed' : ''}
             `}
         >
             {/* Cost Badge */}

@@ -21,7 +21,9 @@ const App: React.FC = () => {
     resources: GAME_CONSTANTS.INITIAL_RESOURCES,
     selectedEntity: null,
     selectedBuilding: null,
-    cooldowns: {}
+    cooldowns: {},
+    infectionDetected: false,
+    evacuationPoint: null
   });
 
   const [radioLogs, setRadioLogs] = useState<RadioMessage[]>([]);
@@ -62,7 +64,9 @@ const App: React.FC = () => {
         resources: newState.resources,
         selectedEntity: newState.selectedEntity,
         selectedBuilding: newState.selectedBuilding,
-        cooldowns: newState.cooldowns
+        cooldowns: newState.cooldowns,
+        infectionDetected: newState.infectionDetected,
+        evacuationPoint: newState.evacuationPoint
     }));
   }, []);
 
@@ -99,7 +103,9 @@ const App: React.FC = () => {
       resources: GAME_CONSTANTS.INITIAL_RESOURCES,
       selectedEntity: null,
       selectedBuilding: null,
-      cooldowns: {}
+      cooldowns: {},
+      infectionDetected: false,
+      evacuationPoint: null
     });
     setRadioLogs([]);
     setSelectedTool(ToolType.NONE);

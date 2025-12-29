@@ -184,6 +184,14 @@ class AudioService {
         this.playTone(800, 'sine', 0.1, 0.2);
         this.playTone(1200, 'sine', 0.2, 0.2, 0.1);
         break;
+      case SoundType.CIV_ALARM:
+        // Synthesis of a siren/alarm
+        for (let i = 0; i < 4; i++) {
+            const delay = i * 1.5;
+            this.playTone(600, 'sawtooth', 0.8, 0.15, delay);
+            this.playTone(400, 'sawtooth', 0.8, 0.15, delay + 0.8);
+        }
+        break;
       
       // Demographic-specific vocalizations
       case SoundType.CIV_FEAR:

@@ -55,7 +55,8 @@ export enum ToolType {
   SPEC_OPS = 'SPEC_OPS',       // Spawns soldiers
   AIRSTRIKE = 'AIRSTRIKE',     // Kills zombies in area
   MEDIC_TEAM = 'MEDIC_TEAM',    // Spawns medics to cure trapped zombies
-  TACTICAL_ANALYSIS = 'TACTICAL_ANALYSIS' // AI tactical analysis for buildings
+  TACTICAL_ANALYSIS = 'TACTICAL_ANALYSIS', // AI tactical analysis for buildings
+  BROADCAST_ANNOUNCEMENT = 'BROADCAST_ANNOUNCEMENT' // Guide civilians to evacuation point
 }
 
 export enum WeaponType {
@@ -90,7 +91,8 @@ export enum SoundType {
   ZOM_ROAR = 'ZOM_ROAR',
   ZOM_BITE = 'ZOM_BITE',
   ZOM_FIGHT = 'ZOM_FIGHT',
-  AIRSTRIKE_TICK = 'AIRSTRIKE_TICK'
+  AIRSTRIKE_TICK = 'AIRSTRIKE_TICK',
+  CIV_ALARM = 'CIV_ALARM'
 }
 
 export interface Coordinates {
@@ -192,6 +194,8 @@ export interface GameState {
   };
   
   droppedWeapons: WeaponItem[];
+  infectionDetected: boolean;
+  evacuationPoint: Coordinates | null;
 }
 
 export interface RadioMessage {

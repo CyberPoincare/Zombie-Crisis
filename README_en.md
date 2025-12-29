@@ -5,7 +5,7 @@
 
 **Real-world Survival Simulation Management Game**
 
-[![Version](https://img.shields.io/badge/version-1.4.1-blue.svg)](package.json)
+[![Version](https://img.shields.io/badge/version-1.4.3-blue.svg)](package.json)
 [![React](https://img.shields.io/badge/React-19-61dafb.svg)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.x-blue.svg)](https://www.typescriptlang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)

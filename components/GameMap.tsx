@@ -502,7 +502,7 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
   const droppedWeaponsRef = useRef<WeaponItem[]>([]);
   const strikeZonesRef = useRef<StrikeZone[]>([]);
   const cratersRef = useRef<Crater[]>([]);
-  const stateRef = useRef<GameState>({ ...initialState, droppedWeapons: [] });
+  const stateRef = useRef<GameState>({ ...initialState, droppedWeapons: [], infectionDetected: false });
   const pausedRef = useRef(isPaused);
   const selectedIdRef = useRef(selectedEntityId);
   const selectedBuildingIdRef = useRef(selectedBuildingId);
@@ -1220,6 +1220,17 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
                     acceleration = addVec(acceleration, multVec(getWanderForce(entity), 0.5));
                     maxSpeed *= 0.6;
                 }
+            } else if (stateRef.current.evacuationPoint) {
+                // EVACUATION LOGIC
+                const dToEvac = getVecDistance(entity.position, stateRef.current.evacuationPoint);
+                if (dToEvac > 0.0002) {
+                     acceleration = addVec(acceleration, getSeekForce(entity, stateRef.current.evacuationPoint));
+                     maxSpeed *= 0.8; // Moving with purpose
+                } else {
+                     // Arrived at evac point, wander around
+                     acceleration = addVec(acceleration, multVec(getWanderForce(entity), 0.2));
+                     maxSpeed *= 0.3;
+                }
             } else {
                 // Calm state
                 const shouldSeekIndoor = !entity.isWanderer && !isInside;
@@ -1366,15 +1377,38 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
         // 1.1c ZOMBIE DISCOVERY
         if (zombies.length > 0 && !discoveryRef.current) {
             discoveryRef.current = true;
+            stateRef.current.infectionDetected = true;
+
+            // Trigger initial preparation countdowns
+            const now = Date.now();
+            stateRef.current.cooldowns = {
+                ...stateRef.current.cooldowns,
+                [ToolType.SUPPLY_DROP]: now + GAME_CONSTANTS.COOLDOWN_SUPPLY,
+                [ToolType.SPEC_OPS]: now + GAME_CONSTANTS.COOLDOWN_SPECOPS,
+                [ToolType.MEDIC_TEAM]: now + GAME_CONSTANTS.COOLDOWN_MEDIC,
+                [ToolType.AIRSTRIKE]: now + GAME_CONSTANTS.COOLDOWN_AIRSTRIKE
+            };
+
             const targetZ = zombies[0];
             mapDataService.getLocationInfo(targetZ.position).then(info => {
                 generateRadioChatter(stateRef.current, targetZ.position, 'DISCOVERY', info || undefined).then(text => {
                     addLog({
-                        sender: i18n.t('intel_center'),
+                        sender: i18n.t('headquarters'), // Using Headquarters for the discovery message as well for authority
                         text
                     });
+                    
+                    // Specific command from Headquarters
+                    setTimeout(() => {
+                        addLog({
+                            sender: i18n.t('headquarters'),
+                            text: "各单位注意，现在开始紧急准备任务！"
+                        });
+                    }, 1000);
                 });
             });
+
+            // Sync state immediately
+            onUpdateState({ ...stateRef.current });
         }
         
         // Continuous Infection Logic
@@ -1902,6 +1936,26 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
              onAddLog({ id: Date.now().toString(), sender: i18n.t('medic_team'), text: i18n.t('medic_team_ready'), timestamp: Date.now() });
             onSelectTool(ToolType.NONE);
         }
+    } else if (selectedTool === ToolType.BROADCAST_ANNOUNCEMENT) {
+        stateRef.current.evacuationPoint = clickPos;
+        audioService.playSound(SoundType.CIV_ALARM);
+        
+        // Fetch location names for the radio message
+        Promise.all([
+            mapDataService.getLocationInfo(outbreakPoint || clickPos),
+            mapDataService.getLocationInfo(clickPos)
+        ]).then(([infInfo, evacInfo]) => {
+            const infectionLoc = infInfo?.name || i18n.t('unknown_area');
+            const evacLoc = evacInfo?.name || i18n.t('unknown_area');
+            
+            addLog({
+                sender: i18n.t('city_council'),
+                text: i18n.t('broadcast_msg', { infectionLoc, evacLoc })
+            });
+        });
+        
+        onUpdateState({ ...stateRef.current });
+        onSelectTool(ToolType.NONE);
     }
   };
 
@@ -1914,7 +1968,7 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
       zoomControl={false}
       scrollWheelZoom={true}
       doubleClickZoom={false}
-      className={`h-full w-full z-0 bg-gray-900 ${selectedTool === ToolType.SUPPLY_DROP || selectedTool === ToolType.AIRSTRIKE ? 'cursor-none' : 'cursor-crosshair'}`}
+      className={`h-full w-full z-0 bg-gray-900 ${selectedTool === ToolType.SUPPLY_DROP || selectedTool === ToolType.AIRSTRIKE || selectedTool === ToolType.BROADCAST_ANNOUNCEMENT ? 'cursor-none' : 'cursor-crosshair'}`}
     >
       <TileLayer
         attribution='&copy; OSM'
@@ -1941,6 +1995,13 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
               center={[mousePos.lat, mousePos.lng]} 
               radius={GAME_CONSTANTS.AIRSTRIKE_RADIUS * 111320}
               pathOptions={{ dashArray: '5, 10', color: '#EF4444', fillColor: '#EF4444', fillOpacity: 0.1 }}
+          />
+      )}
+      {mousePos && selectedTool === ToolType.BROADCAST_ANNOUNCEMENT && (
+          <Circle 
+              center={[mousePos.lat, mousePos.lng]} 
+              radius={0.0005 * 111320} // Just a visual guide
+              pathOptions={{ dashArray: '5, 10', color: '#22C55E', fillColor: '#22C55E', fillOpacity: 0.1 }}
           />
       )}
 
@@ -2049,6 +2110,58 @@ const GameMap = forwardRef<GameMapRef, GameMapProps>((props, ref) => {
           );
       })}
       
+      {/* Evacuation Point Marker */}
+      {stateRef.current.evacuationPoint && (
+          <Marker 
+              position={[stateRef.current.evacuationPoint.lat, stateRef.current.evacuationPoint.lng]}
+              icon={L.divIcon({
+                  className: 'bg-transparent',
+                  html: `
+                      <div class="evac-marker">
+                          <div class="evac-icon">🏠</div>
+                          <div class="evac-pulse"></div>
+                      </div>
+                      <style>
+                          .evac-marker {
+                              position: relative;
+                              display: flex;
+                              align-items: center;
+                              justify-content: center;
+                              width: 40px;
+                              height: 40px;
+                          }
+                          .evac-icon {
+                              font-size: 32px;
+                              z-index: 10;
+                              filter: drop-shadow(0 0 10px rgba(34, 197, 94, 0.8));
+                              animation: evac-bounce 2s ease-in-out infinite;
+                          }
+                          .evac-pulse {
+                              position: absolute;
+                              width: 100%;
+                              height: 100%;
+                              background: rgba(34, 197, 94, 0.4);
+                              border-radius: 50%;
+                              animation: evac-pulse 2s cubic-bezier(0.24, 0, 0.38, 1) infinite;
+                          }
+                          @keyframes evac-bounce {
+                              0%, 100% { transform: translateY(0) scale(1); }
+                              50% { transform: translateY(-5px) scale(1.1); }
+                          }
+                          @keyframes evac-pulse {
+                              0% { transform: scale(0.5); opacity: 1; }
+                              100% { transform: scale(2.5); opacity: 0; }
+                          }
+                      </style>
+                  `,
+                  iconSize: [40, 40],
+                  iconAnchor: [20, 20]
+              })}
+              zIndexOffset={900}
+              interactive={false}
+          />
+      )}
+
       {/* Outbreak Point Marker */}
       {outbreakPoint && (
           <Marker 
